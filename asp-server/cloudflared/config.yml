@@ -1,0 +1,19 @@
+# Cloudflare NAMED tunnel for the ExitGuard ASP → asp.mdloglabs.org (stable, permanent URL —
+# safe to register on-chain). See ../TUNNEL.md for the full setup. Create the tunnel first:
+#   cloudflared tunnel create exitguard-asp
+# then replace <TUNNEL_UUID> below with the UUID it prints.
+
+tunnel: exitguard-asp
+credentials-file: /home/mdlog/.cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  # Public HTTPS → local asp-server. Register https://asp.mdloglabs.org/mcp on OKX.AI.
+  - hostname: asp.mdloglabs.org
+    service: http://localhost:4000
+    originRequest:
+      # MCP is Streamable HTTP (SSE-style) — keep chunked encoding so the stream isn't buffered.
+      disableChunkedEncoding: false
+      connectTimeout: 30s
+      noHappyEyeballs: true
+  # Catch-all → 404
+  - service: http_status:404

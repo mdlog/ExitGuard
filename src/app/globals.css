@@ -1,0 +1,238 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+  ExitGuard — "Instrument-Grade Risk Terminal"
+  Dark oscilloscope / aircraft-annunciator readout. Near-black surface ladder,
+  1px hairlines (never shadows/glow), a mono numeric voice, one rationed cyan
+  signal trace, and an EARNED BLOCK/WARN/OK semantic trio used only on verdicts.
+  Ref discipline: docs/DESIGN_BRIEF.md + docs/DESIGN_REF.md (linear.app technique).
+  Single committed dark look — no light mode.
+*/
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  /* type — mono is the load-bearing instrument voice */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", monospace;
+  --font-display: var(--font-geist-mono), ui-monospace, monospace;
+
+  /* instrument surface ladder + ink */
+  --color-xg-void: var(--xg-void);
+  --color-xg-bg: var(--xg-bg);
+  --color-xg-panel: var(--xg-panel);
+  --color-xg-raised: var(--xg-raised);
+  --color-xg-line: var(--xg-line);
+  --color-xg-line-bright: var(--xg-line-bright);
+  --color-xg-ink: var(--xg-ink);
+  --color-xg-dim: var(--xg-dim);
+  --color-xg-faint: var(--xg-faint);
+
+  /* earned semantics — verdict / zones only */
+  --color-block: var(--xg-block);
+  --color-warn: var(--xg-warn);
+  --color-ok: var(--xg-ok);
+  --color-signal: var(--xg-signal);
+
+  /* shadcn token bridge (mapped onto the instrument palette) */
+  --color-background: var(--xg-bg);
+  --color-foreground: var(--xg-ink);
+  --color-card: var(--xg-panel);
+  --color-card-foreground: var(--xg-ink);
+  --color-popover: var(--xg-raised);
+  --color-popover-foreground: var(--xg-ink);
+  --color-primary: var(--xg-ink);
+  --color-primary-foreground: var(--xg-bg);
+  --color-secondary: var(--xg-raised);
+  --color-secondary-foreground: var(--xg-ink);
+  --color-muted: var(--xg-raised);
+  --color-muted-foreground: var(--xg-dim);
+  --color-accent: var(--xg-raised);
+  --color-accent-foreground: var(--xg-ink);
+  --color-destructive: var(--xg-block);
+  --color-border: var(--xg-line);
+  --color-input: var(--xg-line);
+  --color-ring: var(--xg-signal);
+
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+}
+
+:root {
+  color-scheme: dark;
+
+  --xg-void: #05070a;
+  --xg-bg: #090c11;
+  --xg-panel: #0f141b;
+  --xg-raised: #151d27;
+  --xg-line: #202a36;
+  --xg-line-bright: #33414f;
+  --xg-ink: #e9eff5;
+  --xg-dim: #8593a3;
+  /* raised from #55616f to pass WCAG AA (≈4.6–5:1) as small text on the panel/raised surfaces,
+     while staying a step below --xg-dim to preserve the hierarchy. */
+  --xg-faint: #7b8794;
+
+  --xg-block: #ff3b47;
+  --xg-warn: #ffb020;
+  --xg-ok: #2ed47a;
+  --xg-signal: #22d3ee;
+
+  --radius: 4px;
+}
+
+@layer base {
+  * {
+    @apply border-xg-line;
+    outline-color: color-mix(in oklab, var(--xg-signal) 55%, transparent);
+  }
+  html {
+    @apply font-sans;
+    background: var(--xg-void);
+  }
+  body {
+    @apply bg-xg-bg text-xg-ink;
+    /* faint instrument grid + top vignette — atmosphere without glow */
+    background-image:
+      linear-gradient(180deg, #0b0f15 0%, var(--xg-bg) 42%, var(--xg-bg) 100%),
+      linear-gradient(to right, color-mix(in oklab, var(--xg-line) 34%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--xg-line) 34%, transparent) 1px, transparent 1px);
+    background-size: 100% 100%, 72px 72px, 72px 72px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "ss01", "cv01";
+  }
+  /* every number is tabular by default — the instrument reads true */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "zero" 1;
+    letter-spacing: -0.01em;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--xg-signal) 32%, transparent);
+    color: #fff;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--xg-void);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--xg-line);
+    border: 2px solid var(--xg-void);
+    border-radius: 6px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--xg-line-bright);
+  }
+}
+
+@layer components {
+  /* the machined panel — surface ladder + hairline, never shadow/glow */
+  .xg-panel {
+    background: var(--xg-panel);
+    border: 1px solid var(--xg-line);
+    border-radius: var(--radius-md);
+  }
+  .xg-plate {
+    background: linear-gradient(180deg, var(--xg-raised), var(--xg-panel));
+    border: 1px solid var(--xg-line);
+    border-radius: var(--radius-md);
+  }
+  /* a corner-ticked instrument frame */
+  .xg-ticks::before,
+  .xg-ticks::after {
+    content: "";
+    position: absolute;
+    width: 7px;
+    height: 7px;
+    border: 1px solid var(--xg-line-bright);
+    pointer-events: none;
+  }
+  .xg-ticks::before {
+    top: -1px;
+    left: -1px;
+    border-right: 0;
+    border-bottom: 0;
+  }
+  .xg-ticks::after {
+    bottom: -1px;
+    right: -1px;
+    border-left: 0;
+    border-top: 0;
+  }
+  /* uppercase machined micro-label */
+  .xg-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--xg-dim);
+  }
+  /* the big engraved verdict word — Geist bold, machined via tracking + caps */
+  .xg-display {
+    font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    text-transform: uppercase;
+  }
+  /* a live indicator lamp (annunciator) */
+  .xg-lamp {
+    border-radius: 999px;
+    background: currentColor;
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, currentColor 40%, transparent),
+      0 0 10px 0 color-mix(in oklab, currentColor 55%, transparent);
+  }
+}
+
+/* ---- motion: only on real state change (ref discipline) ---- */
+@keyframes xg-latch {
+  0% { filter: brightness(2.2) saturate(1.4); transform: translateY(-1px); }
+  16% { filter: brightness(1); transform: translateY(0.5px); }
+  30% { transform: translateY(0); }
+  100% { filter: brightness(1); }
+}
+@keyframes xg-lamp-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.62; }
+}
+@keyframes xg-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0.15; }
+}
+@keyframes xg-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes xg-scan {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(2400%); }
+}
+@keyframes xg-settle {
+  0% { background: color-mix(in oklab, var(--xg-signal) 26%, transparent); }
+  100% { background: transparent; }
+}
+@keyframes xg-trace-in {
+  from { stroke-dashoffset: 1200; }
+  to { stroke-dashoffset: 0; }
+}
+
+.xg-anim-latch { animation: xg-latch 480ms cubic-bezier(0.2, 0.9, 0.15, 1); }
+.xg-anim-breathe { animation: xg-lamp-breathe 1.7s ease-in-out infinite; }
+.xg-anim-blink { animation: xg-blink 1.15s steps(1) infinite; }
+.xg-anim-settle { animation: xg-settle 900ms ease-out; }
+.xg-rise { animation: xg-rise 520ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .xg-anim-latch, .xg-anim-breathe, .xg-anim-blink, .xg-anim-settle, .xg-rise {
+    animation: none !important;
+  }
+}
