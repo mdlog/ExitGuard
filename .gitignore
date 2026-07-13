@@ -40,3 +40,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local-only hackathon submission notes (not for public repo)
+HACKQUEST_SUBMIT.md
+SUBMIT_TODAY.md
+hackquest-richtext.html
+HACKQUEST_PROJECT.md
