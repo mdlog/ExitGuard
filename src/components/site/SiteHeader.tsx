@@ -17,9 +17,13 @@ export function SiteHeader() {
     <header className="sticky top-0 z-40 border-b border-xg-line bg-xg-bg/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-[1240px] items-center justify-between px-5 py-3">
         <Link href="/" className="flex items-center gap-2.5">
-          <span
-            className="xg-lamp h-2 w-2 rounded-full"
-            style={{ color: 'var(--xg-ok)', background: 'var(--xg-ok)' }}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logo-mark.png"
+            alt="ExitGuard"
+            width={28}
+            height={28}
+            className="rounded-[6px]"
           />
           <span className="xg-display text-sm text-xg-ink">EXITGUARD</span>
           <span className="hidden font-mono text-[10px] tracking-[0.16em] text-xg-faint sm:inline">

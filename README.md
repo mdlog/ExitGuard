@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/logo-exitguard.png" alt="ExitGuard logo" width="150" />
+</p>
+
 # Exit-Liquidity Guard (ExitGuard)
 
 **The seatbelt your trading agent calls before it becomes the exit liquidity.**
