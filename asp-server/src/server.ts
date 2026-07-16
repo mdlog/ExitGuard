@@ -37,6 +37,59 @@ function mapErr(e: unknown, res: express.Response) {
   res.status(status).json({ error: (e as Error).message });
 }
 
+// ── OKX listing-review compatibility shims ──
+// The review prober hits the endpoint like a plain x402 resource (no MCP Accept header, bodies like
+// `{}`), and validates the 402 challenge in the response BODY — matching OKX's own reference
+// implementation (mock-merchant), which returns {"x402Version":2,"accepts":[...],"error":"Payment
+// Required"} as JSON. Without these shims the transport 406s plain probers ("unreachable") and the
+// x402-express SDK emits `res.status(402).json({})` (challenge only in the base64 header).
+
+// Widen a missing/partial Accept header so plain probers never get 406 from StreamableHTTPServerTransport.
+// The transport converts the Node request via @hono/node-server, which reads req.rawHeaders — patch BOTH
+// views or the shim is invisible to the transport.
+const acceptShim: express.RequestHandler = (req, _res, next) => {
+  const a = String(req.headers.accept || "");
+  if (!a.includes("application/json") || !a.includes("text/event-stream")) {
+    const val = "application/json, text/event-stream";
+    req.headers.accept = val;
+    const rh = req.rawHeaders;
+    let found = false;
+    for (let i = 0; i < rh.length - 1; i += 2)
+      if (rh[i].toLowerCase() === "accept") {
+        rh[i + 1] = val;
+        found = true;
+      }
+    if (!found) rh.push("Accept", val);
+  }
+  next();
+};
+
+// Mirror the SDK's `payment-required` header (base64 or raw JSON) into an empty 402 body.
+const challengeBody: express.RequestHandler = (_req, res, next) => {
+  const orig = res.json.bind(res);
+  res.json = (body?: unknown) => {
+    if (
+      res.statusCode === 402 &&
+      body &&
+      typeof body === "object" &&
+      !Array.isArray(body) &&
+      Object.keys(body as object).length === 0
+    ) {
+      const raw = res.getHeader("payment-required") ?? res.getHeader("x-payment-required");
+      if (raw) {
+        const s = String(raw);
+        try {
+          body = JSON.parse(/^[A-Za-z0-9+/_-]+=*$/.test(s) ? Buffer.from(s, "base64").toString("utf8") : s);
+        } catch {
+          /* keep {} — fail soft */
+        }
+      }
+    }
+    return orig(body);
+  };
+  next();
+};
+
 // ── tiny per-IP rate limiter (protects the free internal proxy + read routes from abuse) ──
 function rateLimiter(maxPerMin: number): express.RequestHandler {
   const hits = new Map<string, number[]>();
@@ -165,7 +218,7 @@ async function main() {
     (req as express.Request & { _paid?: boolean })._paid = true;
     next();
   };
-  if (httpPay) app.post("/exit_liquidity_check", markPaid, httpPay, httpHandler);
+  if (httpPay) app.post("/exit_liquidity_check", challengeBody, markPaid, httpPay, httpHandler);
   else app.post("/exit_liquidity_check", httpHandler);
 
   // ── FREE operator route for the demo site's live-data proxy (shared-secret; NOT a public agent API) ──
@@ -212,7 +265,7 @@ async function main() {
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   };
-  app.post("/mcp", (req, res) => {
+  app.post("/mcp", acceptShim, challengeBody, (req, res) => {
     const safe = () => void runMcp(req, res).catch(() => { if (!res.headersSent) res.status(500).end(); });
     // Only a paid tool CALL is charged; initialize / tools/list stay free. Guard against JSON-RPC BATCH
     // (array) bodies: any element that is a paid tools/call makes the whole batch payable — otherwise a
@@ -222,15 +275,35 @@ async function main() {
       typeof b === "object" &&
       (b as { method?: string; params?: { name?: string } }).method === "tools/call" &&
       (b as { params?: { name?: string } }).params?.name === "exit_liquidity_check";
+    // A body with no `method` string is not JSON-RPC at all — that's a review/x402 prober (e.g. `{}`).
+    // Send it through the payment middleware so it sees the standard 402 challenge instead of a
+    // transport 400/406. Real MCP methods (initialize, tools/list, ping, notifications…) stay free.
+    const isProbeBody = (b: unknown): boolean =>
+      !b || typeof b !== "object" || typeof (b as { method?: unknown }).method !== "string";
     const body = req.body as unknown;
     const isPaidCall = Array.isArray(body) ? body.some(isPaidBody) : isPaidBody(body);
+    const isProbe = Array.isArray(body) ? body.every(isProbeBody) : isProbeBody(body);
     (req as express.Request & { _paid?: boolean })._paid = isPaidCall && !!mcpPay;
-    if (isPaidCall && mcpPay) mcpPay(req, res, safe);
+    if ((isPaidCall || isProbe) && mcpPay) mcpPay(req, res, safe);
     else safe();
   });
-  app.get("/mcp", (_req, res) =>
-    res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed; use POST." }, id: null }),
-  );
+  app.get("/mcp", (req, res) => {
+    // Real MCP clients open the SSE stream with Accept: text/event-stream — stateless server → 405
+    // per spec. Anything else (browser, availability prober) gets a friendly 200 service card.
+    if (String(req.headers.accept || "").includes("text/event-stream")) {
+      res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed; use POST." }, id: null });
+      return;
+    }
+    res.json({
+      ok: true,
+      service: "exit-liquidity-guard",
+      protocol: "MCP Streamable HTTP",
+      tool: "exit_liquidity_check",
+      price: PRICE,
+      network: NETWORK,
+      usage: "POST JSON-RPC: initialize / tools/list (free) · tools/call exit_liquidity_check (x402-paid, unpaid → 402 challenge)",
+    });
+  });
 
   // ── public read surfaces for the web app's live tiles (settlement ledger + chain head) ──
   const reads = rateLimiter(120);
