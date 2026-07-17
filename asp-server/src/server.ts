@@ -32,6 +32,19 @@ const app = express();
 app.set("trust proxy", true);
 app.use(express.json());
 
+// ── request log (ground truth for marketplace review probes; stdout → Railway logs) ──
+app.use((req, res, next) => {
+  const t0 = Date.now();
+  res.on("finish", () => {
+    const b = req.body as { method?: string; params?: { name?: string } } | undefined;
+    const m = b && typeof b === "object" && typeof b.method === "string" ? ` rpc=${b.method}${b.params?.name ? `(${b.params.name})` : ""}` : "";
+    console.log(
+      `[req] ${req.method} ${req.path} → ${res.statusCode} ${Date.now() - t0}ms ct=${res.getHeader("content-type") || "-"} ua="${(req.header("user-agent") || "-").slice(0, 60)}"${m}`,
+    );
+  });
+  next();
+});
+
 function mapErr(e: unknown, res: express.Response) {
   const status = e instanceof CheckError ? e.status : e instanceof ConfigError ? 500 : 502;
   res.status(status).json({ error: (e as Error).message });
@@ -257,13 +270,25 @@ async function main() {
           }
       });
     }
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    // enableJsonResponse: POST replies go out as plain application/json instead of an SSE stream.
+    // MCP clients MUST accept both (spec), but the marketplace's x402/review testers read the body
+    // as JSON — an SSE-framed reply looks like "no response" to them and times the task out.
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on("close", () => {
       void transport.close();
       void server.close();
     });
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
+  };
+  const serviceInfo = {
+    ok: true,
+    service: "exit-liquidity-guard",
+    protocol: "MCP Streamable HTTP",
+    tool: "exit_liquidity_check",
+    price: PRICE,
+    network: NETWORK,
+    usage: "POST JSON-RPC: initialize / tools/list (free) · tools/call exit_liquidity_check (x402-paid, unpaid → 402 challenge)",
   };
   app.post("/mcp", acceptShim, challengeBody, (req, res) => {
     const safe = () => void runMcp(req, res).catch(() => { if (!res.headersSent) res.status(500).end(); });
@@ -284,7 +309,16 @@ async function main() {
     const isPaidCall = Array.isArray(body) ? body.some(isPaidBody) : isPaidBody(body);
     const isProbe = Array.isArray(body) ? body.every(isProbeBody) : isProbeBody(body);
     (req as express.Request & { _paid?: boolean })._paid = isPaidCall && !!mcpPay;
-    if ((isPaidCall || isProbe) && mcpPay) mcpPay(req, res, safe);
+    if (isProbe) {
+      // A probe that PAYS the challenge (full x402 validation loop) must get a 200 resource back,
+      // not a JSON-RPC transport error — mirror OKX's mock-merchant, which serves the resource to
+      // any settled request. Unpaid probes never reach this handler (the middleware 402s them).
+      const probeOk: express.RequestHandler = (_pq, ps) => void ps.status(200).json(serviceInfo);
+      if (mcpPay) mcpPay(req, res, () => probeOk(req, res, () => {}));
+      else probeOk(req, res, () => {});
+      return;
+    }
+    if (isPaidCall && mcpPay) mcpPay(req, res, safe);
     else safe();
   });
   app.get("/mcp", (req, res) => {
@@ -294,15 +328,7 @@ async function main() {
       res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed; use POST." }, id: null });
       return;
     }
-    res.json({
-      ok: true,
-      service: "exit-liquidity-guard",
-      protocol: "MCP Streamable HTTP",
-      tool: "exit_liquidity_check",
-      price: PRICE,
-      network: NETWORK,
-      usage: "POST JSON-RPC: initialize / tools/list (free) · tools/call exit_liquidity_check (x402-paid, unpaid → 402 challenge)",
-    });
+    res.json(serviceInfo);
   });
 
   // ── public read surfaces for the web app's live tiles (settlement ledger + chain head) ──
