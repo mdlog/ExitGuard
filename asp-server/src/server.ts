@@ -42,7 +42,7 @@ app.use((req, res, next) => {
     const b = req.body as { method?: string; params?: { name?: string } } | undefined;
     const m = b && typeof b === "object" && typeof b.method === "string" ? ` rpc=${b.method}${b.params?.name ? `(${b.params.name})` : ""}` : "";
     console.log(
-      `[req] ${req.method} ${req.path} → ${res.statusCode} ${Date.now() - t0}ms ct=${res.getHeader("content-type") || "-"} ua="${(req.header("user-agent") || "-").slice(0, 60)}"${m}`,
+      `[req] ${req.method} ${req.originalUrl.slice(0, 120)} → ${res.statusCode} ${Date.now() - t0}ms ct=${res.getHeader("content-type") || "-"} ua="${(req.header("user-agent") || "-").slice(0, 60)}"${m}`,
     );
   });
   next();
@@ -297,6 +297,37 @@ async function main() {
     network: NETWORK,
     usage: "POST JSON-RPC: initialize / tools/list (free) · tools/call exit_liquidity_check (x402-paid, unpaid → 402 challenge)",
   };
+  // A settled (paid) non-MCP request — OKX's x402 client replays a bare GET/POST, params in the
+  // query string or JSON body. If check params are present, the deliverable is the REAL analysis;
+  // otherwise fall back to the service card (a paid probe still gets a 200 resource).
+  const paidPlainHandler = async (req: express.Request, res: express.Response) => {
+    const q = req.query as Record<string, unknown>;
+    const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? (req.body as Record<string, unknown>) : {};
+    const src = { ...q, ...b };
+    if (src.token_address && src.chain && src.size_usd) {
+      try {
+        const check = await runCheck({
+          token_address: String(src.token_address),
+          chain: String(src.chain),
+          size_usd: Number(src.size_usd),
+          side: src.side === "short" ? "short" : "long",
+        });
+        res.on("finish", () => {
+          try {
+            recordSettledCall(check, req, res);
+          } catch {
+            /* best-effort */
+          }
+        });
+        res.json(check);
+        return;
+      } catch (e) {
+        mapErr(e, res);
+        return;
+      }
+    }
+    res.status(200).json(serviceInfo);
+  };
   app.post("/mcp", acceptShim, challengeBody, (req, res) => {
     const safe = () => void runMcp(req, res).catch(() => { if (!res.headersSent) res.status(500).end(); });
     // Only a paid tool CALL is charged; initialize / tools/list stay free. Guard against JSON-RPC BATCH
@@ -317,10 +348,10 @@ async function main() {
     const isProbe = Array.isArray(body) ? body.every(isProbeBody) : isProbeBody(body);
     (req as express.Request & { _paid?: boolean })._paid = isPaidCall && !!mcpPay;
     if (isProbe) {
-      // A probe that PAYS the challenge (full x402 validation loop) must get a 200 resource back,
-      // not a JSON-RPC transport error — mirror OKX's mock-merchant, which serves the resource to
-      // any settled request. Unpaid probes never reach this handler (the middleware 402s them).
-      const probeOk: express.RequestHandler = (_pq, ps) => void ps.status(200).json(serviceInfo);
+      // A probe that PAYS the challenge (full x402 validation loop) gets a 200 resource back —
+      // the real analysis when params came along, the service card otherwise. Unpaid probes
+      // never reach this handler (the middleware 402s them).
+      const probeOk: express.RequestHandler = (pq, ps) => void paidPlainHandler(pq as express.Request, ps as express.Response);
       if (mcpPay) mcpPay(req, res, () => probeOk(req, res, () => {}));
       else probeOk(req, res, () => {});
       return;
@@ -337,7 +368,7 @@ async function main() {
       res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed; use POST." }, id: null });
       return;
     }
-    if (mcpGetPay) mcpGetPay(req, res, () => void res.status(200).json(serviceInfo));
+    if (mcpGetPay) mcpGetPay(req, res, () => void paidPlainHandler(req, res));
     else res.json(serviceInfo);
   });
 
