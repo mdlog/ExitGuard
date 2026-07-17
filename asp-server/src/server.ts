@@ -30,6 +30,9 @@ const app = express();
 // X-Forwarded-For. Trust it so the rate limiter buckets per real client instead of lumping every
 // request under the proxy's 127.0.0.1. Safe because the server binds to localhost behind the tunnel.
 app.set("trust proxy", true);
+// No ETag/304s: the marketplace's x402 validator must always see a full-bodied response (a cached
+// 304 with an empty body reads as "not a valid x402 service").
+app.set("etag", false);
 app.use(express.json());
 
 // ── request log (ground truth for marketplace review probes; stdout → Railway logs) ──
@@ -176,6 +179,7 @@ async function main() {
   const creds = OKX_API_KEY && OKX_SECRET_KEY && OKX_PASSPHRASE && PAY_TO;
   let httpPay: Middleware | null = null;
   let mcpPay: Middleware | null = null;
+  let mcpGetPay: Middleware | null = null;
 
   if (creds) {
     const base = {
@@ -189,6 +193,9 @@ async function main() {
     };
     httpPay = await makePaymentMiddleware({ ...base, routeKey: "POST /exit_liquidity_check", description: "Exit-Liquidity Guard — exitable at size?" });
     mcpPay = await makePaymentMiddleware({ ...base, routeKey: "POST /mcp", description: "Exit-Liquidity Guard — exitable at size?" });
+    // The marketplace's x402 validator probes the endpoint with a bare GET and expects the 402
+    // challenge (mock-merchant reference behaves the same) — so GET carries the challenge too.
+    mcpGetPay = await makePaymentMiddleware({ ...base, routeKey: "GET /mcp", description: "Exit-Liquidity Guard — exitable at size?" });
     if (httpPay || mcpPay) console.log(`[x402] PAID ${PRICE} → settle ${NETWORK} → ${PAY_TO}${STRICT ? " (strict)" : ""}`);
   } else {
     console.warn("[x402] OKX creds / PAY_TO missing — endpoints run UNPAID (dev). Set env before go-live.");
@@ -321,14 +328,17 @@ async function main() {
     if (isPaidCall && mcpPay) mcpPay(req, res, safe);
     else safe();
   });
-  app.get("/mcp", (req, res) => {
+  app.get("/mcp", challengeBody, (req, res) => {
     // Real MCP clients open the SSE stream with Accept: text/event-stream — stateless server → 405
-    // per spec. Anything else (browser, availability prober) gets a friendly 200 service card.
+    // per spec. Everyone else (the marketplace's x402 validator probes with a bare GET) gets the
+    // standard 402 challenge, mirroring OKX's mock-merchant reference; a GET that actually PAYS
+    // gets the 200 service card.
     if (String(req.headers.accept || "").includes("text/event-stream")) {
       res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed; use POST." }, id: null });
       return;
     }
-    res.json(serviceInfo);
+    if (mcpGetPay) mcpGetPay(req, res, () => void res.status(200).json(serviceInfo));
+    else res.json(serviceInfo);
   });
 
   // ── public read surfaces for the web app's live tiles (settlement ledger + chain head) ──
